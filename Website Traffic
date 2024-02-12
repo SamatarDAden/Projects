@@ -1,0 +1,104 @@
+-- Observing Data
+
+-- View the entire dataset
+SELECT*  
+FROM `bigquery-public-data.google_analytics_sample.ga_sessions_201707*`; 
+--71812 Rows
+
+-- View data types in 'totals'
+SELECT totals  
+FROM `bigquery-public-data.google_analytics_sample.ga_sessions_201707*`; 
+
+-- View data types in 'hits'
+SELECT hits 
+FROM `bigquery-public-data.google_analytics_sample.ga_sessions_201707*`; 
+
+-- View data types in the table schema
+SELECT column_name, data_type
+FROM `bigquery-public-data.google_analytics_sample.INFORMATION_SCHEMA.COLUMNS`
+WHERE table_name LIKE 'ga_sessions_201707%';
+
+-- Data Cleaning
+
+-- Create a temporary table with cleaned data
+CREATE TEMP TABLE CleanedData AS (
+  WITH RankedData AS (
+    SELECT
+      CONCAT(fullVisitorId, CAST(visitId AS STRING)) AS uniqueVisitorId,
+      DATE(TIMESTAMP_SECONDS(visitStartTime)) AS date,
+      totals.bounces,
+      totals.transactions,
+      totals.totalTransactionRevenue,
+      totals.visits,
+      trafficSource.source,
+      device.browser,
+      device.operatingSystem,
+      device.deviceCategory = 'mobile' AS isMobileDevice,
+      geoNetwork.country,
+      hits.page.pageTitle,
+      hits.isEntrance,
+      hits.isExit,
+      ROW_NUMBER() OVER (PARTITION BY CONCAT(fullVisitorId, CAST(visitId AS STRING)) ORDER BY visitStartTime DESC) AS row_num
+    FROM
+      `bigquery-public-data.google_analytics_sample.ga_sessions_201707*`,
+      UNNEST(hits) AS hits
+    WHERE
+      totals.visits IS NOT NULL
+      AND geoNetwork.country IS NOT NULL
+       )
+  SELECT *
+  FROM RankedData
+);
+SELECT *
+FROM CleanedData
+ORDER BY (SELECT uniqueVisitorId), row_num;
+-- 324096 Rows
+-- 71708 Unique IDs
+
+-- Data Exploration
+
+--Browser/Device
+SELECT browser AS Browser, operatingSystem AS OperatingSystem, isMobileDevice AS IsMobileDevice,COUNT(DISTINCT uniqueVisitorId) AS UniqueVisitorsCount
+FROM `_script5082416f73acade5d3aaaa27a6a4c6b3215af462.CleanedData`
+GROUP BY browser, operatingSystem, isMobileDevice
+ORDER BY UniqueVisitorsCount DESC;
+
+--Traffic Sources
+SELECT source AS TrafficSource, COUNT(DISTINCT uniqueVisitorId) AS UniqueVisitorsCount,
+FROM `_script5082416f73acade5d3aaaa27a6a4c6b3215af462.CleanedData`
+GROUP BY TrafficSource
+ORDER BY UniqueVisitorsCount DESC;
+
+-- Page-Level Insights
+WITH CategorizedPages AS (
+  SELECT PageTitle, SUM(bounces) AS BouncedVisits, IF(COUNT(*) > 0, SUM(bounces) / COUNT(*), 0) AS BounceRate, COUNT(*) AS PageViews,
+    SUM(IF(isEntrance, 1, 0)) AS Entrances, SUM(IF(isExit, 1, 0)) AS Exits,
+    CASE
+      WHEN PageTitle = 'Home' THEN 'Home'
+      WHEN PageTitle LIKE '%Google Merchandise Store%' THEN 'Google Merchandise Store'
+      WHEN PageTitle LIKE '%YouTube%' THEN 'YouTube'
+      WHEN PageTitle LIKE '%FAQ%' OR PageTitle LIKE '%Policy%' OR PageTitle LIKE '%Account%' THEN 'FAQs and Policies'
+      WHEN PageTitle LIKE '%Shopping Cart%' OR PageTitle LIKE '%Checkout%' THEN 'Shopping Cart and Checkout'
+      WHEN PageTitle LIKE '%Google%' OR PageTitle LIKE '%Android%' THEN 'Themes and Branding'
+      ELSE 'Other'
+    END AS PageCategory,
+  FROM `_script5082416f73acade5d3aaaa27a6a4c6b3215af462.CleanedData`
+  WHERE country = 'United States'
+    AND PageTitle IS NOT NULL
+  GROUP BY PageTitle
+)
+SELECT PageTitle,  PageCategory, BouncedVisits, PageViews, Entrances, Exits, BounceRate
+FROM CategorizedPages
+ORDER BY PageViews DESC;
+
+--Trends
+SELECT EXTRACT(DAY FROM DATE(date)) AS Day, SUM(transactions) as TotalTransactions, SUM(totalTransactionRevenue) as totalTransactionRevenue
+FROM `_script5082416f73acade5d3aaaa27a6a4c6b3215af462.CleanedData`
+GROUP BY Day
+ORDER BY Day;
+
+--Geographic 
+SELECT country AS Country, COUNT(DISTINCT uniqueVisitorId) AS Visits
+FROM `_script5082416f73acade5d3aaaa27a6a4c6b3215af462.CleanedData`
+GROUP BY Country
+ORDER BY Visits DESC;
